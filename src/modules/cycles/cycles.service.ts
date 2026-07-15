@@ -1,4 +1,10 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { AccessService } from '../../common/access.module';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -98,11 +104,19 @@ export class CyclesService {
     // Caller must be an active member of the circle owning this period; they
     // can only ever settle their own contribution (looked up by their id).
     await this.access.assertMemberByPeriod(periodId, memberUserId);
+    const period = await this.prisma.period.findUnique({ where: { id: periodId } });
+    if (!period) throw new NotFoundException('Period not found');
+    // Contributions can only be paid into an open period; a missed obligation on
+    // a closed period is an arrear, settled via settleArrear (not here).
+    if (period.state !== 'collecting') {
+      throw new BadRequestException(`Period is ${period.state}; not collecting contributions`);
+    }
+
     const contribution = await this.prisma.contribution.findUnique({
       where: { periodId_memberId: { periodId, memberId: memberUserId } },
     });
     if (!contribution) throw new NotFoundException('No contribution obligation for this member');
-    if (contribution.status === 'paid') return contribution;
+    if (contribution.status === 'paid') return contribution; // idempotent
 
     const updated = await this.prisma.contribution.update({
       where: { id: contribution.id },
@@ -132,6 +146,13 @@ export class CyclesService {
       },
     });
     if (!period) throw new NotFoundException('Period not found');
+
+    // Idempotent: a period that already paid out returns its existing payout
+    // rather than closing twice (safe to retry after a dropped response).
+    if (period.state === 'paid_out') {
+      const existing = await this.prisma.payout.findUnique({ where: { periodId } });
+      if (existing) return existing;
+    }
     if (period.state !== 'collecting') {
       throw new BadRequestException(`Period is ${period.state}, not collecting`);
     }
@@ -141,18 +162,33 @@ export class CyclesService {
       throw new BadRequestException(`${unpaid.length} contribution(s) still pending`);
     }
 
+    // The pot released now is only what was actually collected; missed
+    // contributions remain outstanding arrears (see settleArrear), not losses
+    // silently absorbed here.
     const amount = period.contributions
       .filter((c) => c.status === 'paid')
       .reduce((sum, c) => sum + c.amount, 0);
 
-    const payout = await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
+      // Atomic compare-and-swap: only the transaction that flips collecting ->
+      // closed proceeds. A concurrent close sees count 0 and returns the winner's
+      // payout, so the pot can never be released twice.
+      const cas = await tx.period.updateMany({
+        where: { id: periodId, state: 'collecting' },
+        data: { state: 'closed' },
+      });
+      if (cas.count === 0) {
+        const existing = await tx.payout.findUnique({ where: { periodId } });
+        if (existing) return { payout: existing, closed: false };
+        throw new ConflictException('Period is already being closed');
+      }
+
       if (force) {
         await tx.contribution.updateMany({
           where: { periodId, status: { not: 'paid' } },
           data: { status: 'missed' },
         });
       }
-      await tx.period.update({ where: { id: periodId }, data: { state: 'closed' } });
 
       // Look up recipient's userId for the payout.
       const recipient = await tx.membership.findUnique({ where: { id: period.recipientId } });
@@ -193,18 +229,104 @@ export class CyclesService {
         target: periodId,
         metadata: { amount, missed: unpaid.length },
       });
-      return payout;
+      return { payout, closed: true };
     });
 
-    // Reputational enforcement is the only lever in custody-less Phase 1: dock
-    // reputation and audit each member who missed this period.
-    if (force) {
+    // Only the transaction that actually closed the period runs enforcement.
+    // Reputational enforcement is the only lever in custody-less Phase 1.
+    if (result.closed && force) {
       for (const c of unpaid) {
         await this.enforcement.flagMissed(periodId, c.memberId);
       }
     }
 
-    return payout;
+    return result.payout;
+  }
+
+  /**
+   * Settle an outstanding arrear: a member pays a contribution they previously
+   * missed (money owed to that period's recipient, who received a short pot).
+   * Phase 1 is coordination-only, so this records the settlement — it does not
+   * move funds. Reputation stays docked: missing the deadline still cost them.
+   *
+   * NOTE: the terminal case — a defaulter who never settles — is a loss-bearing
+   * BUSINESS DECISION that is deliberately not encoded here. The debt simply
+   * stays open until settled or explicitly written off by a future policy.
+   */
+  async settleArrear(periodId: string, memberUserId: string) {
+    await this.access.assertMemberByPeriod(periodId, memberUserId);
+    const contribution = await this.prisma.contribution.findUnique({
+      where: { periodId_memberId: { periodId, memberId: memberUserId } },
+    });
+    if (!contribution) throw new NotFoundException('No contribution obligation for this member');
+    if (contribution.status !== 'missed') {
+      throw new BadRequestException('No outstanding arrear to settle for this period');
+    }
+
+    const period = await this.prisma.period.findUnique({ where: { id: periodId } });
+    const recipient = await this.prisma.membership.findUnique({
+      where: { id: period!.recipientId },
+    });
+
+    const settled = await this.prisma.contribution.update({
+      where: { id: contribution.id },
+      data: { status: 'paid', paidAt: new Date() },
+    });
+    await this.audit.record({
+      actorId: memberUserId,
+      action: 'arrear.settled',
+      target: periodId,
+      metadata: { amount: contribution.amount, owedTo: recipient!.userId },
+    });
+    return settled;
+  }
+
+  /**
+   * Defer a turn: the current recipient passes the pot to the next member and
+   * moves back one slot (spec §6.4). Implemented as a swap of the two periods'
+   * recipients and the two memberships' rotation order. Only allowed before the
+   * period pays out, and only by the recipient themselves.
+   */
+  async deferTurn(periodId: string, actorUserId: string) {
+    const period = await this.prisma.period.findUnique({
+      where: { id: periodId },
+      include: { cycle: { include: { periods: true } } },
+    });
+    if (!period) throw new NotFoundException('Period not found');
+    if (period.state === 'closed' || period.state === 'paid_out') {
+      throw new BadRequestException('Cannot defer a period that has already paid out');
+    }
+
+    const recipient = await this.prisma.membership.findUnique({ where: { id: period.recipientId } });
+    if (!recipient || recipient.userId !== actorUserId) {
+      throw new ForbiddenException('Only the upcoming recipient can defer their turn');
+    }
+
+    const next = period.cycle.periods.find((p) => p.index === period.index + 1);
+    if (!next) throw new BadRequestException('No later turn to defer to');
+
+    const currentMembershipId = period.recipientId;
+    const nextMembershipId = next.recipientId;
+
+    await this.prisma.$transaction(async (tx) => {
+      // Swap which membership receives in each of the two periods.
+      await tx.period.update({ where: { id: period.id }, data: { recipientId: nextMembershipId } });
+      await tx.period.update({ where: { id: next.id }, data: { recipientId: currentMembershipId } });
+      // Keep membership.order consistent with the new receipt order.
+      await tx.membership.update({ where: { id: currentMembershipId }, data: { order: next.index } });
+      await tx.membership.update({ where: { id: nextMembershipId }, data: { order: period.index } });
+      await this.audit.record({
+        actorId: actorUserId,
+        action: 'turn.deferred',
+        target: periodId,
+        metadata: { toPeriodIndex: next.index },
+      });
+    });
+
+    return this.prisma.period.findMany({
+      where: { cycleId: period.cycleId },
+      orderBy: { index: 'asc' },
+    });
   }
 
   /** Phase 1: recipient confirms they received the pot off-platform. */

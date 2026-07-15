@@ -31,4 +31,16 @@ export class CyclesController {
   confirm(@Param('id') periodId: string, @CurrentUser() userId: string) {
     return this.cycles.confirmReceipt(periodId, userId);
   }
+
+  // A member pays a contribution they previously missed (still owed).
+  @Post('periods/:id/settle-arrear')
+  settleArrear(@Param('id') periodId: string, @CurrentUser() userId: string) {
+    return this.cycles.settleArrear(periodId, userId);
+  }
+
+  // The current recipient passes their turn and moves back one slot.
+  @Post('periods/:id/defer')
+  defer(@Param('id') periodId: string, @CurrentUser() userId: string) {
+    return this.cycles.deferTurn(periodId, userId);
+  }
 }

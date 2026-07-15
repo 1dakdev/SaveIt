@@ -21,7 +21,13 @@ export class IdentityService {
   async findOne(id: string) {
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException('User not found');
-    return user;
+    // Outstanding arrears = the total of this member's still-missed
+    // contributions across all circles (money they owe but haven't settled).
+    const owed = await this.prisma.contribution.aggregate({
+      _sum: { amount: true },
+      where: { memberId: id, status: 'missed' },
+    });
+    return { ...user, arrears: owed._sum.amount ?? 0 };
   }
 
   /**

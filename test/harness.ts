@@ -8,6 +8,8 @@ import { CirclesModule } from '../src/modules/circles/circles.module';
 import { CirclesService } from '../src/modules/circles/circles.service';
 import { CyclesModule } from '../src/modules/cycles/cycles.module';
 import { CyclesService } from '../src/modules/cycles/cycles.service';
+import { IdentityModule } from '../src/modules/identity/identity.module';
+import { IdentityService } from '../src/modules/identity/identity.service';
 import { RotationModule } from '../src/modules/rotation/rotation.module';
 import { RotationService } from '../src/modules/rotation/rotation.service';
 
@@ -17,6 +19,7 @@ export interface Harness {
   circles: CirclesService;
   rotation: RotationService;
   cycles: CyclesService;
+  identity: IdentityService;
   access: AccessService;
   close: () => Promise<void>;
 }
@@ -32,6 +35,7 @@ export async function makeHarness(): Promise<Harness> {
       CirclesModule,
       RotationModule,
       CyclesModule,
+      IdentityModule,
     ],
   }).compile();
   await module.init();
@@ -43,6 +47,7 @@ export async function makeHarness(): Promise<Harness> {
     circles: module.get(CirclesService),
     rotation: module.get(RotationService),
     cycles: module.get(CyclesService),
+    identity: module.get(IdentityService),
     access: module.get(AccessService),
     close: async () => {
       await module.close();

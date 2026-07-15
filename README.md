@@ -89,9 +89,10 @@ curl -s -XPOST $BASE/periods/$PERIOD0/close -H "x-user-id: $AMA"
 curl -s -XPOST $BASE/periods/$PERIOD0/confirm-receipt -H "x-user-id: $AMA"
 ```
 
-Other endpoints: `GET /users/me`, `POST /users/:id/verify-kyc` (dev-only KYC stub),
-`POST /circles`, `POST /circles/:id/invites`, `POST /circles/:id/accept`,
-`POST /circles/:id/swaps` + `POST /swaps/:id/accept|decline`,
+Other endpoints: `GET /users/me` (includes `arrears`), `POST /users/:id/verify-kyc`
+(dev-only KYC stub), `POST /circles`, `POST /circles/:id/invites`,
+`POST /circles/:id/accept`, `POST /circles/:id/swaps` + `POST /swaps/:id/accept|decline`,
+`POST /periods/:id/settle-arrear`, `POST /periods/:id/defer`,
 `POST /disputes` + `POST /disputes/:id/resolve-paid|resolve-unpaid`,
 `POST /circles/:id/messages`, `GET /health`.
 
@@ -106,9 +107,10 @@ npm test          # needs Postgres running (npm run infra:up, or brew service)
 
 Coverage focuses on the money path — vote-to-lock (unanimity / decline blocks),
 close + payout math, grace-close (missed contributions + reputation docking),
-cycle completion — and the authorization matrix (participant reads, member
-mark-paid, organizer-only close/invite, KYC gate). CI (`.github/workflows/ci.yml`)
-runs build + tests on every push against a Postgres service container.
+cycle completion, idempotent/race-safe close, arrears + settlement, and defer —
+plus the authorization matrix (participant reads, member mark-paid,
+organizer-only close/invite, KYC gate). CI (`.github/workflows/ci.yml`) runs
+build + tests on every push against a Postgres service container.
 
 ## Module map (`src/modules/`)
 
@@ -126,13 +128,27 @@ runs build + tests on every push against a Postgres service container.
 | `jobs` | scaffold | BullMQ reminders/close (needs `REDIS_URL`) |
 | `audit` | real | append-only log of money-/rule-relevant actions |
 
+## Money model
+
+- Amounts are integer **minor units (cents)** end to end — no floats.
+- A grace close releases only the **collected** pot; each unpaid member keeps an
+  **outstanding arrear** (their `missed` contribution), surfaced as `arrears` on
+  the user and settleable later via `POST /periods/:id/settle-arrear`.
+- `close` is **idempotent and race-safe** (atomic compare-and-swap on period
+  state; the pot is released exactly once). `mark-paid` is idempotent and only
+  valid on a collecting period.
+
+> **Open business decision (not encoded):** who absorbs the loss when a
+> defaulter *never* settles an arrear. The debt stays open until settled or a
+> future write-off policy resolves it — the code does not silently absorb it.
+> The doc flags this as the single biggest risk; decide before beta.
+
 ## Remaining gaps (tracked, not shipped)
 
 - **KYC** is a dev-only stub; wire the Persona/Alloy webhook to flip `kycStatus`.
 - **Notifications, Plaid, and the Phase-2 ledger/ACH** are stubs.
 - **Period close and missed-payment detection are manual endpoints**; the `jobs`
   module is where the scheduled versions belong.
-- **Idempotency & concurrency**: `mark-paid`/`close` aren't idempotent and
-  concurrent votes/closes aren't guarded against races.
-- **Defer** workflow from the spec is not implemented; missed contributions
-  aren't tracked as arrears (debt still owed after a grace close).
+- **Vote/lock races** aren't guarded as strictly as close (low-risk: unanimity
+  is re-read each vote), and there's no explicit account **suspension** on
+  repeat default yet.
