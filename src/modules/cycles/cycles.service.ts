@@ -135,9 +135,17 @@ export class CyclesService {
    * grace) the pot is released to the recipient and the next period opens.
    */
   async closePeriod(periodId: string, actorUserId: string, force = false) {
-    // Closing a period releases the pot — organizer-only. (A scheduled job will
-    // also call this path once contributions are in / grace expires.)
+    // Closing a period releases the pot — organizer-only for user requests.
     await this.access.assertOrganizerByPeriod(periodId, actorUserId);
+    return this.closePeriodInternal(periodId, force);
+  }
+
+  /**
+   * The actual close logic, WITHOUT user authorization. Called by closePeriod
+   * (after the organizer check) and by the scheduler as a system action. Do not
+   * expose directly on a user-facing route.
+   */
+  async closePeriodInternal(periodId: string, force = false) {
     const period = await this.prisma.period.findUnique({
       where: { id: periodId },
       include: {
@@ -254,7 +262,10 @@ export class CyclesService {
    * stays open until settled or explicitly written off by a future policy.
    */
   async settleArrear(periodId: string, memberUserId: string) {
-    await this.access.assertMemberByPeriod(periodId, memberUserId);
+    // A suspended member must be able to pay their way back, so this requires
+    // participation (not active membership) — settling is how they get reinstated.
+    const circleId = await this.access.circleIdForPeriod(periodId);
+    await this.access.assertParticipant(circleId, memberUserId);
     const contribution = await this.prisma.contribution.findUnique({
       where: { periodId_memberId: { periodId, memberId: memberUserId } },
     });
@@ -278,6 +289,9 @@ export class CyclesService {
       target: periodId,
       metadata: { amount: contribution.amount, owedTo: recipient!.userId },
     });
+
+    // Settling may bring the member back below the suspension threshold.
+    await this.enforcement.evaluateSuspension(circleId, memberUserId);
     return settled;
   }
 

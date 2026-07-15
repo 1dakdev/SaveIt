@@ -122,10 +122,10 @@ build + tests on every push against a Postgres service container.
 | `cycles` | real | periods, mark-paid, close + payout, receipt confirm |
 | `chat` | real | per-circle messages (WebSocket fan-out = TODO) |
 | `disputes` | real | 3-day review window, resolve |
-| `enforcement` | partial | flag missed, dock reputation (suspension = TODO) |
+| `enforcement` | real | dock reputation, suspend after N arrears, reinstate on settle |
+| `scheduler` | real | `tick()` sweep: auto-close, dispute expiry, reminders (BullMQ when `REDIS_URL` set) |
 | `notifications` | stub | Expo/Twilio/email dispatch (logs only) |
 | `payments` | stub | Plaid balance signal (P1) + BaaS ACH/ledger (P2) |
-| `jobs` | scaffold | BullMQ reminders/close (needs `REDIS_URL`) |
 | `audit` | real | append-only log of money-/rule-relevant actions |
 
 ## Money model
@@ -146,9 +146,9 @@ build + tests on every push against a Postgres service container.
 ## Remaining gaps (tracked, not shipped)
 
 - **KYC** is a dev-only stub; wire the Persona/Alloy webhook to flip `kycStatus`.
-- **Notifications, Plaid, and the Phase-2 ledger/ACH** are stubs.
-- **Period close and missed-payment detection are manual endpoints**; the `jobs`
-  module is where the scheduled versions belong.
+- **Notifications and Plaid** are stubs; the `scheduler` calls `notifications.send`
+  but it only logs. The **Phase-2 ledger/ACH** is dormant.
 - **Vote/lock races** aren't guarded as strictly as close (low-risk: unanimity
-  is re-read each vote), and there's no explicit account **suspension** on
-  repeat default yet.
+  is re-read each vote).
+- **Suspension blocks a member's actions** but does not yet block them from
+  *receiving* a pot while they owe arrears — tied to the loss-bearing decision.

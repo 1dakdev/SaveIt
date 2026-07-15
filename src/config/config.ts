@@ -19,6 +19,12 @@ export interface AppConfig {
     jwksUri?: string;
     audience?: string;
   };
+  // Days after a period's due date before a grace (force) close applies.
+  gracePeriodDays: number;
+  enforcement: {
+    // Unsettled arrears in a circle at which a member is suspended.
+    suspendThreshold: number;
+  };
 }
 
 function load(): AppConfig {
@@ -52,6 +58,10 @@ function load(): AppConfig {
     isProduction,
     port: Number(process.env.PORT ?? 3000),
     auth,
+    gracePeriodDays: Number(process.env.GRACE_PERIOD_DAYS ?? 3),
+    enforcement: {
+      suspendThreshold: Number(process.env.ENFORCEMENT_SUSPEND_THRESHOLD ?? 2),
+    },
   };
 }
 

@@ -3,7 +3,9 @@ import { AccessModule, AccessService } from '../src/common/access.module';
 import { PrismaModule } from '../src/prisma/prisma.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { AuditModule } from '../src/modules/audit/audit.module';
-import { EnforcementModule } from '../src/modules/enforcement/enforcement.module';
+import { EnforcementModule, EnforcementService } from '../src/modules/enforcement/enforcement.module';
+import { NotificationsModule } from '../src/modules/notifications/notifications.module';
+import { SchedulerModule, SchedulerService } from '../src/modules/scheduler/scheduler.module';
 import { CirclesModule } from '../src/modules/circles/circles.module';
 import { CirclesService } from '../src/modules/circles/circles.service';
 import { CyclesModule } from '../src/modules/cycles/cycles.module';
@@ -20,6 +22,8 @@ export interface Harness {
   rotation: RotationService;
   cycles: CyclesService;
   identity: IdentityService;
+  enforcement: EnforcementService;
+  scheduler: SchedulerService;
   access: AccessService;
   close: () => Promise<void>;
 }
@@ -36,6 +40,8 @@ export async function makeHarness(): Promise<Harness> {
       RotationModule,
       CyclesModule,
       IdentityModule,
+      NotificationsModule,
+      SchedulerModule,
     ],
   }).compile();
   await module.init();
@@ -48,6 +54,8 @@ export async function makeHarness(): Promise<Harness> {
     rotation: module.get(RotationService),
     cycles: module.get(CyclesService),
     identity: module.get(IdentityService),
+    enforcement: module.get(EnforcementService),
+    scheduler: module.get(SchedulerService),
     access: module.get(AccessService),
     close: async () => {
       await module.close();
@@ -97,4 +105,16 @@ export async function makeCircle(
     await circles.acceptInvite(circle.id, users[i].id);
   }
   return { circle, users, organizer };
+}
+
+/** Build an n-member circle and lock its first cycle; returns periods in order. */
+export async function lockCircle(h: Harness, n = 3, amount = 5000) {
+  const { circle, users, organizer } = await makeCircle(h.prisma, h.circles, n, amount);
+  const cycle = await h.rotation.proposeOrder(circle.id, organizer.id, {});
+  for (const u of users) await h.rotation.vote(cycle!.id, u.id, 'approve' as never);
+  const periods = await h.prisma.period.findMany({
+    where: { cycleId: cycle!.id },
+    orderBy: { index: 'asc' },
+  });
+  return { circle, users, organizer, cycleId: cycle!.id, periods };
 }

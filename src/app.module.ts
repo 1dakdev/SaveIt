@@ -11,10 +11,10 @@ import { CyclesModule } from './modules/cycles/cycles.module';
 import { DisputesModule } from './modules/disputes/disputes.module';
 import { EnforcementModule } from './modules/enforcement/enforcement.module';
 import { IdentityModule } from './modules/identity/identity.module';
-import { JobsModule } from './modules/jobs/jobs.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { RotationModule } from './modules/rotation/rotation.module';
+import { SchedulerModule } from './modules/scheduler/scheduler.module';
 
 @Controller('health')
 class HealthController {
@@ -34,7 +34,6 @@ class HealthController {
     AuditModule,
     NotificationsModule,
     EnforcementModule,
-    JobsModule,
     IdentityModule,
     CirclesModule,
     RotationModule,
@@ -42,6 +41,7 @@ class HealthController {
     DisputesModule,
     ChatModule,
     PaymentsModule,
+    SchedulerModule,
   ],
   controllers: [HealthController],
 })
