@@ -21,9 +21,28 @@ export interface AppConfig {
   };
   // Days after a period's due date before a grace (force) close applies.
   gracePeriodDays: number;
+  // Days an opened dispute stays reviewable before the sweep expires it.
+  disputeWindowDays: number;
+  // Domain used to synthesize an email for IdP users whose token lacks one.
+  noreplyEmailDomain: string;
+  rotation: {
+    // Days between period due dates, by circle frequency.
+    weeklyIntervalDays: number;
+    monthlyIntervalDays: number;
+  };
   enforcement: {
     // Unsettled arrears in a circle at which a member is suspended.
     suspendThreshold: number;
+    // Reputation points deducted when a contribution is flagged missed.
+    reputationDock: number;
+    // Starting reputation for a new user (mirrors the Prisma schema default).
+    defaultReputation: number;
+  };
+  scheduler: {
+    // How many days before a due date to send contribution reminders.
+    reminderLeadDays: number;
+    // Interval between scheduler sweeps when Redis-backed (ms).
+    sweepIntervalMs: number;
   };
 }
 
@@ -59,8 +78,20 @@ function load(): AppConfig {
     port: Number(process.env.PORT ?? 3000),
     auth,
     gracePeriodDays: Number(process.env.GRACE_PERIOD_DAYS ?? 3),
+    disputeWindowDays: Number(process.env.DISPUTE_WINDOW_DAYS ?? 3),
+    noreplyEmailDomain: process.env.NOREPLY_EMAIL_DOMAIN ?? 'users.noreply.sankofa',
+    rotation: {
+      weeklyIntervalDays: Number(process.env.ROTATION_WEEKLY_INTERVAL_DAYS ?? 7),
+      monthlyIntervalDays: Number(process.env.ROTATION_MONTHLY_INTERVAL_DAYS ?? 30),
+    },
     enforcement: {
       suspendThreshold: Number(process.env.ENFORCEMENT_SUSPEND_THRESHOLD ?? 2),
+      reputationDock: Number(process.env.ENFORCEMENT_REPUTATION_DOCK ?? 20),
+      defaultReputation: Number(process.env.ENFORCEMENT_DEFAULT_REPUTATION ?? 100),
+    },
+    scheduler: {
+      reminderLeadDays: Number(process.env.SCHEDULER_REMINDER_LEAD_DAYS ?? 2),
+      sweepIntervalMs: Number(process.env.SCHEDULER_SWEEP_INTERVAL_MS ?? 60_000),
     },
   };
 }

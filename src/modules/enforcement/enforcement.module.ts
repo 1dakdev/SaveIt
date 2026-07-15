@@ -3,8 +3,6 @@ import { config } from '../../config/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 
-const REPUTATION_DOCK = 20;
-
 /**
  * Missed-payment enforcement.
  *
@@ -28,7 +26,11 @@ export class EnforcementService {
       data: { status: 'missed' },
     });
     const user = await this.prisma.user.findUnique({ where: { id: memberUserId } });
-    const nextRep = Math.max(0, (user?.reputation ?? 100) - REPUTATION_DOCK);
+    const nextRep = Math.max(
+      0,
+      (user?.reputation ?? config.enforcement.defaultReputation) -
+        config.enforcement.reputationDock,
+    );
     await this.prisma.user.update({
       where: { id: memberUserId },
       data: { reputation: nextRep },

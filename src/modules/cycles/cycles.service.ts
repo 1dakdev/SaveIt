@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { config } from '../../config/config';
 import { AccessService } from '../../common/access.module';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -55,14 +56,24 @@ export class CyclesService {
     }
 
     const startDate = new Date();
-    const intervalDays = cycle.circle.frequency === 'weekly' ? 7 : 30;
+    const intervalDays =
+      cycle.circle.frequency === 'weekly'
+        ? config.rotation.weeklyIntervalDays
+        : config.rotation.monthlyIntervalDays;
     const pot = cycle.circle.amount * active.length;
 
     return this.prisma.$transaction(async (tx) => {
-      await tx.cycle.update({
-        where: { id: cycleId },
+      // Atomic compare-and-swap: only the transaction that flips proposed ->
+      // active proceeds, so two near-simultaneous final approvals can't both
+      // build the period set (the loser sees count 0 and returns the winner's
+      // locked cycle rather than colliding on the (cycleId,index) constraint).
+      const cas = await tx.cycle.updateMany({
+        where: { id: cycleId, status: 'proposed' },
         data: { status: 'active', lockedAt: startDate, startDate },
       });
+      if (cas.count === 0) {
+        return tx.cycle.findUnique({ where: { id: cycleId }, include: { periods: true } });
+      }
       await tx.circle.update({ where: { id: cycle.circleId }, data: { status: 'active' } });
 
       // One period per member; recipient = member whose order matches the index.
