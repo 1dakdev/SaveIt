@@ -1,0 +1,332 @@
+// SanKofa data model — PostgreSQL system of record.
+//
+// Design rules (from the architecture doc):
+//   - Money-relevant tables are append-only where possible; state changes are
+//     new rows or explicit status transitions, never silent overwrites.
+//   - Phase 2 ledger is strict double-entry (LedgerEntry, dormant in Phase 1).
+//   - Every money-/rule-relevant action lands in AuditLog.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
+enum KycStatus {
+  unverified
+  pending
+  verified
+  rejected
+}
+
+model User {
+  id         String    @id @default(cuid())
+  name       String
+  email      String    @unique
+  phone      String?   @unique
+  kycStatus  KycStatus @default(unverified)
+  reputation Int       @default(100) // 0..100; drops on defaults
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  memberships   Membership[]
+  createdCircles Circle[]       @relation("CircleCreator")
+  votes         Vote[]
+  contributions Contribution[]
+  payouts       Payout[]
+  disputes      Dispute[]      @relation("DisputeOpener")
+  messages      Message[]
+  auditLogs     AuditLog[]
+}
+
+// ---------------------------------------------------------------------------
+// Circles & membership
+// ---------------------------------------------------------------------------
+
+enum Frequency {
+  weekly
+  monthly
+}
+
+enum TrustType {
+  invite_only // strongest social enforcement — Phase 1 default
+  vetted
+}
+
+enum CircleStatus {
+  forming
+  active
+  complete
+  wound_down
+}
+
+model Circle {
+  id         String       @id @default(cuid())
+  name       String
+  amount     Int          // contribution amount per period, in minor units (cents)
+  frequency  Frequency
+  trustType  TrustType    @default(invite_only)
+  status     CircleStatus @default(forming)
+  creatorId  String
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  creator     User         @relation("CircleCreator", fields: [creatorId], references: [id])
+  memberships Membership[]
+  cycles      Cycle[]
+  messages    Message[]
+}
+
+enum MemberRole {
+  organizer
+  member
+}
+
+enum MemberState {
+  invited
+  active
+  left
+  suspended
+}
+
+model Membership {
+  id        String      @id @default(cuid())
+  userId    String
+  circleId  String
+  role      MemberRole  @default(member)
+  // Payout position within the rotation (0-based). Null until an order is proposed.
+  order     Int?
+  state     MemberState @default(invited)
+  termsAcceptedAt DateTime?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  user           User           @relation(fields: [userId], references: [id])
+  circle         Circle         @relation(fields: [circleId], references: [id])
+  votes          Vote[]
+  swapsRequested SwapRequest[]  @relation("SwapFrom")
+  swapsReceived  SwapRequest[]  @relation("SwapTo")
+
+  @@unique([userId, circleId])
+  @@index([circleId])
+}
+
+// ---------------------------------------------------------------------------
+// Rotation & voting
+// ---------------------------------------------------------------------------
+
+enum VoteValue {
+  approve
+  decline
+}
+
+model Vote {
+  id           String    @id @default(cuid())
+  membershipId String
+  cycleId      String
+  userId       String
+  value        VoteValue
+  createdAt    DateTime  @default(now())
+
+  membership Membership @relation(fields: [membershipId], references: [id])
+  cycle      Cycle      @relation(fields: [cycleId], references: [id])
+  user       User       @relation(fields: [userId], references: [id])
+
+  @@unique([membershipId, cycleId]) // one vote per member per cycle
+}
+
+// ---------------------------------------------------------------------------
+// Cycles & periods
+// ---------------------------------------------------------------------------
+
+enum CycleStatus {
+  proposed // order proposed, awaiting votes
+  active   // locked and running
+  complete
+}
+
+model Cycle {
+  id        String      @id @default(cuid())
+  circleId  String
+  index     Int         // 0-based cycle number within the circle
+  status    CycleStatus @default(proposed)
+  startDate DateTime?
+  lockedAt  DateTime?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  circle  Circle   @relation(fields: [circleId], references: [id])
+  votes   Vote[]
+  periods Period[]
+
+  @@unique([circleId, index])
+}
+
+enum PeriodState {
+  upcoming
+  collecting
+  closed
+  paid_out
+}
+
+model Period {
+  id          String      @id @default(cuid())
+  cycleId     String
+  index       Int         // 0-based; equals recipient's rotation order
+  recipientId String      // Membership.id of the period's recipient
+  dueDate     DateTime
+  state       PeriodState @default(upcoming)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  cycle         Cycle          @relation(fields: [cycleId], references: [id])
+  contributions Contribution[]
+  payout        Payout?
+  disputes      Dispute[]
+
+  @@unique([cycleId, index])
+}
+
+// ---------------------------------------------------------------------------
+// Money movement (Phase 1: tracked obligations, off-platform settlement)
+// ---------------------------------------------------------------------------
+
+enum ContributionStatus {
+  pending
+  paid
+  missed
+}
+
+model Contribution {
+  id        String             @id @default(cuid())
+  periodId  String
+  memberId  String             // User.id
+  amount    Int
+  status    ContributionStatus @default(pending)
+  paidAt    DateTime?
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  period Period @relation(fields: [periodId], references: [id])
+  member User   @relation(fields: [memberId], references: [id])
+
+  @@unique([periodId, memberId]) // one obligation per member per period
+  @@index([periodId])
+}
+
+enum PayoutStatus {
+  pending
+  released
+  confirmed
+}
+
+model Payout {
+  id          String       @id @default(cuid())
+  periodId    String       @unique
+  recipientId String       // User.id
+  amount      Int
+  status      PayoutStatus @default(pending)
+  confirmedAt DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  period    Period @relation(fields: [periodId], references: [id])
+  recipient User   @relation(fields: [recipientId], references: [id])
+}
+
+// ---------------------------------------------------------------------------
+// Swaps, disputes, chat
+// ---------------------------------------------------------------------------
+
+enum SwapStatus {
+  requested
+  accepted
+  declined
+}
+
+model SwapRequest {
+  id         String     @id @default(cuid())
+  fromMember String     // Membership.id
+  toMember   String     // Membership.id
+  status     SwapStatus @default(requested)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  from Membership @relation("SwapFrom", fields: [fromMember], references: [id])
+  to   Membership @relation("SwapTo", fields: [toMember], references: [id])
+}
+
+enum DisputeStatus {
+  open
+  resolved_paid
+  resolved_unpaid
+  expired
+}
+
+model Dispute {
+  id        String        @id @default(cuid())
+  openedBy  String        // User.id
+  periodId  String
+  txRef     String?       // reference to off-platform transaction
+  status    DisputeStatus @default(open)
+  openedAt  DateTime      @default(now())
+  resolvesAt DateTime     // openedAt + 3 days
+  resolvedAt DateTime?
+
+  opener User   @relation("DisputeOpener", fields: [openedBy], references: [id])
+  period Period @relation(fields: [periodId], references: [id])
+}
+
+enum MessageKind {
+  member
+  system
+}
+
+model Message {
+  id        String      @id @default(cuid())
+  circleId  String
+  authorId  String?     // null for system messages
+  body      String
+  kind      MessageKind @default(member)
+  createdAt DateTime    @default(now())
+
+  circle Circle @relation(fields: [circleId], references: [id])
+  author User?  @relation(fields: [authorId], references: [id])
+
+  @@index([circleId])
+}
+
+// ---------------------------------------------------------------------------
+// Ledger (Phase 2 — dormant in Phase 1) & audit
+// ---------------------------------------------------------------------------
+
+model LedgerEntry {
+  id        String   @id @default(cuid())
+  accountId String
+  debit     Int      @default(0)
+  credit    Int      @default(0)
+  ref       String   // links to Contribution/Payout/etc.
+  createdAt DateTime @default(now())
+
+  @@index([accountId])
+}
+
+model AuditLog {
+  id       String   @id @default(cuid())
+  actorId  String?
+  action   String
+  target   String
+  metadata String?  // JSON string (SQLite/Postgres-agnostic)
+  ts       DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id])
+
+  @@index([target])
+}
