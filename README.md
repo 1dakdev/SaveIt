@@ -95,6 +95,21 @@ Other endpoints: `GET /users/me`, `POST /users/:id/verify-kyc` (dev-only KYC stu
 `POST /disputes` + `POST /disputes/:id/resolve-paid|resolve-unpaid`,
 `POST /circles/:id/messages`, `GET /health`.
 
+## Tests
+
+Integration tests run the real service layer against a **dedicated test Postgres**
+(`sankofa_test`), created and migrated automatically, reset between tests:
+
+```bash
+npm test          # needs Postgres running (npm run infra:up, or brew service)
+```
+
+Coverage focuses on the money path — vote-to-lock (unanimity / decline blocks),
+close + payout math, grace-close (missed contributions + reputation docking),
+cycle completion — and the authorization matrix (participant reads, member
+mark-paid, organizer-only close/invite, KYC gate). CI (`.github/workflows/ci.yml`)
+runs build + tests on every push against a Postgres service container.
+
 ## Module map (`src/modules/`)
 
 | Module | Status | Responsibility |
@@ -117,8 +132,6 @@ Other endpoints: `GET /users/me`, `POST /users/:id/verify-kyc` (dev-only KYC stu
 - **Notifications, Plaid, and the Phase-2 ledger/ACH** are stubs.
 - **Period close and missed-payment detection are manual endpoints**; the `jobs`
   module is where the scheduled versions belong.
-- **No automated tests yet** — the money-path logic (rotation, close, payout,
-  enforcement) needs a test suite before this handles real money.
 - **Idempotency & concurrency**: `mark-paid`/`close` aren't idempotent and
   concurrent votes/closes aren't guarded against races.
 - **Defer** workflow from the spec is not implemented; missed contributions
