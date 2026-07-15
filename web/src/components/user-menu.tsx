@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BadgeCheck, LogOut, ShieldQuestion } from "lucide-react";
+import { BadgeCheck, Copy, LogOut, ShieldQuestion } from "lucide-react";
 import { api } from "@/lib/api";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { initials } from "@/lib/format";
@@ -39,17 +39,17 @@ export function UserMenu() {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" className="h-9 gap-2 px-2">
-          <Avatar className="size-7">
-            <AvatarFallback className="bg-primary/10 text-primary text-xs font-medium">
-              {initials(user.name)}
-            </AvatarFallback>
-          </Avatar>
-          <span className="hidden max-w-28 truncate text-sm font-medium sm:inline">
-            {user.name}
-          </span>
-        </Button>
+      <DropdownMenuTrigger
+        render={<Button variant="ghost" className="h-9 gap-2 px-2" />}
+      >
+        <Avatar className="size-7">
+          <AvatarFallback className="bg-primary/10 text-primary text-xs font-medium">
+            {initials(user.name)}
+          </AvatarFallback>
+        </Avatar>
+        <span className="hidden max-w-28 truncate text-sm font-medium sm:inline">
+          {user.name}
+        </span>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-60">
         <DropdownMenuLabel className="flex flex-col gap-1">
@@ -65,6 +65,14 @@ export function UserMenu() {
           </div>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onClick={() => {
+            navigator.clipboard?.writeText(user.id);
+            toast.success("User id copied");
+          }}
+        >
+          <Copy className="size-4" /> Copy my id
+        </DropdownMenuItem>
         {user.kycStatus !== "verified" ? (
           <DropdownMenuItem onClick={verify}>
             <BadgeCheck className="size-4" /> Verify KYC (dev)
