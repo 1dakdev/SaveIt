@@ -1,11 +1,9 @@
-import { Body, Controller, Param, Post, UseGuards } from '@nestjs/common';
-import { AuthGuard } from '../../common/auth.guard';
+import { Body, Controller, Param, Post } from '@nestjs/common';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { ProposeOrderDto, SwapRequestDto, VoteDto } from './dto';
 import { RotationService } from './rotation.service';
 
 @Controller()
-@UseGuards(AuthGuard)
 export class RotationController {
   constructor(private readonly rotation: RotationService) {}
 

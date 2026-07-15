@@ -85,7 +85,7 @@ export class CirclesService {
     return updated;
   }
 
-  async findOne(circleId: string) {
+  async findOne(circleId: string, actorUserId: string) {
     const circle = await this.prisma.circle.findUnique({
       where: { id: circleId },
       include: {
@@ -94,6 +94,10 @@ export class CirclesService {
       },
     });
     if (!circle) throw new NotFoundException('Circle not found');
+    // Only participants (invited or active) may view a circle's details.
+    if (!circle.memberships.some((m) => m.userId === actorUserId && m.state !== 'left')) {
+      throw new ForbiddenException('You do not have access to this circle');
+    }
     return circle;
   }
 

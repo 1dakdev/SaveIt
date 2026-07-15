@@ -1,6 +1,6 @@
-import { Body, Controller, Get, Injectable, Param, Post, Module, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Injectable, Param, Post, Module } from '@nestjs/common';
 import { IsString, MinLength } from 'class-validator';
-import { AuthGuard } from '../../common/auth.guard';
+import { AccessService } from '../../common/access.module';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { PrismaService } from '../../prisma/prisma.service';
 
@@ -12,9 +12,13 @@ class PostMessageDto {
 
 @Injectable()
 class ChatService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly access: AccessService,
+  ) {}
 
-  post(circleId: string, authorId: string, body: string) {
+  async post(circleId: string, authorId: string, body: string) {
+    await this.access.assertActiveMember(circleId, authorId);
     return this.prisma.message.create({
       data: { circleId, authorId, body, kind: 'member' },
     });
@@ -25,7 +29,8 @@ class ChatService {
     return this.prisma.message.create({ data: { circleId, body, kind: 'system' } });
   }
 
-  list(circleId: string) {
+  async list(circleId: string, actorId: string) {
+    await this.access.assertParticipant(circleId, actorId);
     return this.prisma.message.findMany({
       where: { circleId },
       orderBy: { createdAt: 'asc' },
@@ -34,7 +39,6 @@ class ChatService {
 }
 
 @Controller('circles/:id/messages')
-@UseGuards(AuthGuard)
 class ChatController {
   constructor(private readonly chat: ChatService) {}
 
@@ -44,8 +48,8 @@ class ChatController {
   }
 
   @Get()
-  list(@Param('id') circleId: string) {
-    return this.chat.list(circleId);
+  list(@Param('id') circleId: string, @CurrentUser() userId: string) {
+    return this.chat.list(circleId, userId);
   }
 }
 

@@ -34,10 +34,25 @@ npm run dev              # API on http://localhost:3000/api
 
 > No Docker? Point `DATABASE_URL` at any Postgres 14+ instance.
 
-## Auth (dev)
+## Auth
 
-Real Phase 1 auth is a managed provider (Clerk/Auth0/Cognito) + JWT. For the
-scaffold, protected routes read an **`x-user-id`** header — pass a seeded user id.
+Every route is authenticated by a **global guard** (fail-closed — a new route is
+protected unless explicitly marked `@Public()`, like `/health`). Two modes:
+
+- **`AUTH_MODE=oidc`** (default in production) — verifies a Bearer JWT against the
+  identity provider's JWKS (`Authorization: Bearer <token>`). Provider-agnostic:
+  set `OIDC_ISSUER` (+ optional `OIDC_JWKS_URI`, `OIDC_AUDIENCE`) for Clerk,
+  Auth0, or Cognito. A user's profile row is provisioned automatically on first
+  authenticated request and linked to the token's `sub`; they start `unverified`
+  (read-only) until KYC flips their status.
+- **`AUTH_MODE=dev`** (local only) — trusts an **`x-user-id`** header so the API is
+  exercisable without an IdP. The app **refuses to boot** if this is set while
+  `NODE_ENV=production`.
+
+Authorization is enforced per action in the services (`AccessService`): reads
+require circle **participation**; contributing/chat require **active membership**;
+closing a period and resolving disputes require the **organizer**. `x-user-id`
+below assumes dev mode.
 
 ## The core loop (end to end)
 
@@ -74,10 +89,11 @@ curl -s -XPOST $BASE/periods/$PERIOD0/close -H "x-user-id: $AMA"
 curl -s -XPOST $BASE/periods/$PERIOD0/confirm-receipt -H "x-user-id: $AMA"
 ```
 
-Other endpoints: `POST /users` (sign-up), `POST /users/:id/verify-kyc` (KYC stub),
+Other endpoints: `GET /users/me`, `POST /users/:id/verify-kyc` (dev-only KYC stub),
 `POST /circles`, `POST /circles/:id/invites`, `POST /circles/:id/accept`,
 `POST /circles/:id/swaps` + `POST /swaps/:id/accept|decline`,
-`POST /disputes`, `POST /circles/:id/messages`, `GET /health`.
+`POST /disputes` + `POST /disputes/:id/resolve-paid|resolve-unpaid`,
+`POST /circles/:id/messages`, `GET /health`.
 
 ## Module map (`src/modules/`)
 
@@ -95,11 +111,15 @@ Other endpoints: `POST /users` (sign-up), `POST /users/:id/verify-kyc` (KYC stub
 | `jobs` | scaffold | BullMQ reminders/close (needs `REDIS_URL`) |
 | `audit` | real | append-only log of money-/rule-relevant actions |
 
-## Known shortcuts (hackathon scope)
+## Remaining gaps (tracked, not shipped)
 
-- Dev auth is an `x-user-id` header, not real JWT verification.
-- KYC, notifications, Plaid, and the Phase-2 ledger/ACH are stubs.
-- Period close and missed-payment detection are manual endpoints; the `jobs`
+- **KYC** is a dev-only stub; wire the Persona/Alloy webhook to flip `kycStatus`.
+- **Notifications, Plaid, and the Phase-2 ledger/ACH** are stubs.
+- **Period close and missed-payment detection are manual endpoints**; the `jobs`
   module is where the scheduled versions belong.
-- Close/dispute-resolve authorization is loose (any authed member); tighten to
-  organizer/admin before real use.
+- **No automated tests yet** — the money-path logic (rotation, close, payout,
+  enforcement) needs a test suite before this handles real money.
+- **Idempotency & concurrency**: `mark-paid`/`close` aren't idempotent and
+  concurrent votes/closes aren't guarded against races.
+- **Defer** workflow from the spec is not implemented; missed contributions
+  aren't tracked as arrears (debt still owed after a grace close).

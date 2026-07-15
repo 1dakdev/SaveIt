@@ -28,6 +28,9 @@ enum KycStatus {
 
 model User {
   id         String    @id @default(cuid())
+  // Subject claim (`sub`) from the identity provider's JWT. Null only for
+  // seed/test rows created outside the IdP; set on first authenticated request.
+  authSubject String?  @unique
   name       String
   email      String    @unique
   phone      String?   @unique

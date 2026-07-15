@@ -1,5 +1,8 @@
 import { Controller, Get, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { Public } from './auth/public.decorator';
+import { AuthModule } from './auth/auth.module';
+import { AccessModule } from './common/access.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { ChatModule } from './modules/chat/chat.module';
@@ -15,6 +18,7 @@ import { RotationModule } from './modules/rotation/rotation.module';
 
 @Controller('health')
 class HealthController {
+  @Public()
   @Get()
   check() {
     return { status: 'ok', service: 'sankofa', phase: 1 };
@@ -25,6 +29,8 @@ class HealthController {
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
+    AuthModule,
+    AccessModule,
     AuditModule,
     NotificationsModule,
     EnforcementModule,

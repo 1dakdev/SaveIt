@@ -1,16 +1,14 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
-import { AuthGuard } from '../../common/auth.guard';
+import { Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { CyclesService } from './cycles.service';
 
 @Controller()
-@UseGuards(AuthGuard)
 export class CyclesController {
   constructor(private readonly cycles: CyclesService) {}
 
   @Get('cycles/:id')
-  get(@Param('id') id: string) {
-    return this.cycles.getCycle(id);
+  get(@Param('id') id: string, @CurrentUser() userId: string) {
+    return this.cycles.getCycle(id, userId);
   }
 
   @Post('periods/:id/mark-paid')
@@ -18,11 +16,15 @@ export class CyclesController {
     return this.cycles.markPaid(periodId, userId);
   }
 
-  // SHORTCUT: any authed member can trigger close; real rule is organizer-only
-  // or a scheduled job. `force` applies the grace-window close.
+  // Organizer-only (enforced in the service). `force` applies the grace-window
+  // close, marking unpaid members missed and docking their reputation.
   @Post('periods/:id/close')
-  close(@Param('id') periodId: string, @Query('force') force?: string) {
-    return this.cycles.closePeriod(periodId, force === 'true');
+  close(
+    @Param('id') periodId: string,
+    @CurrentUser() userId: string,
+    @Query('force') force?: string,
+  ) {
+    return this.cycles.closePeriod(periodId, userId, force === 'true');
   }
 
   @Post('periods/:id/confirm-receipt')

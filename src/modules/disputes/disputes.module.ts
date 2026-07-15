@@ -7,12 +7,11 @@ import {
   Param,
   Post,
   Module,
-  UseGuards,
 } from '@nestjs/common';
 import { IsOptional, IsString } from 'class-validator';
-import { AuthGuard } from '../../common/auth.guard';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { AuditService } from '../audit/audit.service';
+import { AccessService } from '../../common/access.module';
 import { PrismaService } from '../../prisma/prisma.service';
 
 const DISPUTE_WINDOW_DAYS = 3;
@@ -31,11 +30,14 @@ class DisputesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly access: AccessService,
   ) {}
 
   async open(userId: string, dto: OpenDisputeDto) {
     const period = await this.prisma.period.findUnique({ where: { id: dto.periodId } });
     if (!period) throw new NotFoundException('Period not found');
+    // Only an active member of the circle can dispute one of its periods.
+    await this.access.assertMemberByPeriod(dto.periodId, userId);
 
     const now = new Date();
     const resolvesAt = new Date(now.getTime() + DISPUTE_WINDOW_DAYS * 24 * 60 * 60 * 1000);
@@ -61,6 +63,8 @@ class DisputesService {
     const dispute = await this.prisma.dispute.findUnique({ where: { id: disputeId } });
     if (!dispute) throw new NotFoundException('Dispute not found');
     if (dispute.status !== 'open') throw new BadRequestException('Dispute already resolved');
+    // Resolution is an organizer decision (Phase 1 has no separate admin role).
+    await this.access.assertOrganizerByPeriod(dispute.periodId, actorId);
 
     if (paid) {
       await this.prisma.contribution.updateMany({
@@ -83,7 +87,6 @@ class DisputesService {
 }
 
 @Controller('disputes')
-@UseGuards(AuthGuard)
 class DisputesController {
   constructor(private readonly disputes: DisputesService) {}
 

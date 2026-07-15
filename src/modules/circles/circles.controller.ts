@@ -1,11 +1,9 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
-import { AuthGuard } from '../../common/auth.guard';
+import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { CirclesService } from './circles.service';
 import { CreateCircleDto, InviteDto } from './dto';
 
 @Controller('circles')
-@UseGuards(AuthGuard)
 export class CirclesController {
   constructor(private readonly circles: CirclesService) {}
 
@@ -20,8 +18,8 @@ export class CirclesController {
   }
 
   @Get(':id')
-  get(@Param('id') id: string) {
-    return this.circles.findOne(id);
+  get(@Param('id') id: string, @CurrentUser() userId: string) {
+    return this.circles.findOne(id, userId);
   }
 
   @Post(':id/invites')

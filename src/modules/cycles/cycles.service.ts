@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { AccessService } from '../../common/access.module';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { EnforcementService } from '../enforcement/enforcement.module';
@@ -11,6 +12,7 @@ export class CyclesService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly enforcement: EnforcementService,
+    private readonly access: AccessService,
   ) {}
 
   /**
@@ -91,8 +93,11 @@ export class CyclesService {
     });
   }
 
-  /** Member marks their Phase-1 obligation as settled off-platform. */
+  /** Member marks their own Phase-1 obligation as settled off-platform. */
   async markPaid(periodId: string, memberUserId: string) {
+    // Caller must be an active member of the circle owning this period; they
+    // can only ever settle their own contribution (looked up by their id).
+    await this.access.assertMemberByPeriod(periodId, memberUserId);
     const contribution = await this.prisma.contribution.findUnique({
       where: { periodId_memberId: { periodId, memberId: memberUserId } },
     });
@@ -115,7 +120,10 @@ export class CyclesService {
    * Close a collecting period. If every contribution is paid (or `force` after
    * grace) the pot is released to the recipient and the next period opens.
    */
-  async closePeriod(periodId: string, force = false) {
+  async closePeriod(periodId: string, actorUserId: string, force = false) {
+    // Closing a period releases the pot — organizer-only. (A scheduled job will
+    // also call this path once contributions are in / grace expires.)
+    await this.access.assertOrganizerByPeriod(periodId, actorUserId);
     const period = await this.prisma.period.findUnique({
       where: { id: periodId },
       include: {
@@ -218,10 +226,14 @@ export class CyclesService {
     return updated;
   }
 
-  getCycle(cycleId: string) {
-    return this.prisma.cycle.findUnique({
+  async getCycle(cycleId: string, actorUserId: string) {
+    const cycle = await this.prisma.cycle.findUnique({
       where: { id: cycleId },
       include: { periods: { include: { contributions: true, payout: true } }, votes: true },
     });
+    if (!cycle) throw new NotFoundException('Cycle not found');
+    // Only circle participants may see its financial state.
+    await this.access.assertParticipant(cycle.circleId, actorUserId);
+    return cycle;
   }
 }
